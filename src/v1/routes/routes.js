@@ -329,6 +329,7 @@ router.delete("/users/:userId", validarJWT, musicController.deleteOneUser);
 
 // --- Rutas de playlists ---
 router.get("/playlists", musicController.getAllPlaylists);
+router.get("/playlists/user/:id", musicController.getPlaylistsByUser);
 router.get("/playlists/:playlistId", musicController.getOnePlaylist);
 router.post("/playlists", musicController.createNewPlaylist);
 router.patch("/playlists/:playlistsId", musicController.updateOnePlaylist);

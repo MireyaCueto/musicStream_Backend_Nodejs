@@ -145,8 +145,15 @@ async function getOnePlaylist(id) {
 }
 
 async function createPlaylist(data) {
+  if (!data.id_usuario) {
+    throw new Error("La playlist debe incluir un 'id_usuario'");
+  }
+
   const id = uuid();
-  const item = { id_playlist: id, ...data };
+  const item = {
+    id_playlist: id,
+    ...data,
+  };
 
   await ddb.send(new PutCommand({
     TableName: "playlists",
@@ -155,6 +162,7 @@ async function createPlaylist(data) {
 
   return item;
 }
+
 
 async function updatePlaylist(id, changes) {
   const { UpdateExpression, ExpressionAttributeValues } = buildUpdateExpression(changes);

@@ -7,6 +7,9 @@ const bcrypt = require("bcryptjs");
 // Función para generar tokens JWT
 const { generateJWT } = require("../helpers/jwt");
 
+const { ScanCommand } = require("@aws-sdk/lib-dynamodb"); 
+const ddb = require("../database/dynamoClient");
+
 
 // -------------------------------------------------------------
 // ASSETS POR DEFECTO PARA PLAYLISTS Y CANCIONES
@@ -225,7 +228,7 @@ const getOneUser = async (req, res) => {
 const createNewUser = async (req, res) => {
   const { body } = req;
 
-  // Validación básica
+  // 1. Validación de campos obligatorios
   if (!body.nombre || !body.email || !body.password || !body.suscripcion) {
     return res.status(400).send({
       status: "FAILED",
@@ -233,21 +236,40 @@ const createNewUser = async (req, res) => {
     });
   }
 
+  // 2. No permitir que el cliente envíe id_usuario manualmente
+  if (body.id_usuario) {
+    return res.status(400).send({
+      status: "FAILED",
+      data: { error: "No se puede especificar 'id_usuario' manualmente" }
+    });
+  }
+
   try {
-    // Encriptar contraseña
+    // 3. Comprobar si ya existe un usuario con ese email
+    const existingUser = await musicService.getUserByEmail(body.email);
+
+    if (existingUser) {
+      return res.status(409).send({
+        status: "FAILED",
+        data: { error: "Ya existe un usuario con ese email" },
+      });
+    }
+
+    // 4. Encriptar contraseña
     const salt = bcrypt.genSaltSync();
     const hashedPassword = bcrypt.hashSync(body.password, salt);
 
     const newUser = {
       ...body,
       password: hashedPassword,
-      playlists_ids: body.playlists_ids || [],
-      isAdmin: false, // Por defecto, ningún usuario es admin
+      playlists_ids: [],
+      isAdmin: false,
     };
 
+    // 5. Crear usuario
     const createdUser = await musicService.createNewUser(newUser);
 
-    // Generar token JWT
+    // 6. Generar token JWT
     const token = await generateJWT(createdUser.id_usuario, createdUser.nombre);
 
     res.status(201).send({
@@ -285,7 +307,31 @@ const updateOneUser = async (req, res) => {
   }
 
   try {
+    // 1. Comprobar si el usuario existe
+    const user = await musicService.getOneUser(userId);
+
+    if (!user) {
+      return res.status(404).send({
+        status: "FAILED",
+        data: { error: "El usuario no existe" }
+      });
+    }
+
+    // 2. Validar email duplicado si se quiere cambiar
+    if (changes.email) {
+      const existingUser = await musicService.getUserByEmail(changes.email);
+
+      if (existingUser && existingUser.id_usuario !== userId) {
+        return res.status(409).send({
+          status: "FAILED",
+          data: { error: "Ya existe un usuario con ese email" }
+        });
+      }
+    }
+
+    // 3. Actualizar usuario
     const updatedUser = await musicService.updateOneUser(userId, changes);
+
     res.send({ status: "OK", data: updatedUser });
 
   } catch (error) {
@@ -295,6 +341,8 @@ const updateOneUser = async (req, res) => {
     });
   }
 };
+
+
 
 
 /**
@@ -313,7 +361,19 @@ const deleteOneUser = async (req, res) => {
   }
 
   try {
+    // 1. Comprobar si el usuario existe
+    const user = await musicService.getOneUser(userId);
+
+    if (!user) {
+      return res.status(404).send({
+        status: "FAILED",
+        data: { error: "El usuario no existe" }
+      });
+    }
+
+    // 2. Eliminar usuario
     await musicService.deleteOneUser(userId);
+
     res.send({ status: "OK", msg: "Usuario eliminado correctamente" });
 
   } catch (error) {
@@ -323,6 +383,7 @@ const deleteOneUser = async (req, res) => {
     });
   }
 };
+
 
 
 
@@ -382,6 +443,38 @@ const getAllPlaylists = async (req, res) => {
 };
 
 
+const getPlaylistsByUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const params = {
+      TableName: "playlists",
+      FilterExpression: "id_usuario = :id",
+      ExpressionAttributeValues: {
+        ":id": id,
+      },
+    };
+
+    const command = new ScanCommand(params);
+    const result = await ddb.send(command);
+
+    return res.json({
+      status: "OK",
+      total: result.Items.length,
+      data: result.Items,
+    });
+
+  } catch (error) {
+    console.error("Error en getPlaylistsByUser:", error);
+    return res.status(500).json({
+      status: "ERROR",
+      message: "No se pudieron obtener las playlists del usuario",
+    });
+  }
+};
+
+
+
 /**
  * OBTENER UNA PLAYLIST POR ID
  * ----------------------------
@@ -430,23 +523,45 @@ const getOnePlaylist = async (req, res) => {
 const createNewPlaylist = async (req, res) => {
   const { body } = req;
 
-  // Validación mínima
-  if (!body.nombre || !body.descripcion) {
+  if (!body.nombre || !body.descripcion || !body.id_usuario) {
     return res.status(400).send({
       status: "FAILED",
-      data: { error: "Faltan parámetros obligatorios: nombre y descripción" }
+      data: { error: "Faltan parámetros obligatorios: nombre, descripción e id_usuario" }
     });
   }
 
-  // Construcción del objeto playlist
-  const newPlaylist = {
-    ...body,
-    imagen_portada: body.imagen_portada || DEFAULT_PLAYLIST_IMAGE,
-    canciones_ids: body.canciones_ids || []
-  };
-
   try {
+    // 1. Validar que el usuario existe
+    const user = await musicService.getOneUser(body.id_usuario);
+    if (!user) {
+      return res.status(404).send({
+        status: "FAILED",
+        data: { error: "El usuario no existe" }
+      });
+    }
+
+    // 2. Validar que no exista playlist con el mismo nombre para ese usuario
+    const allPlaylists = await musicService.getAllPlaylists();
+    const duplicate = allPlaylists.find(
+      p => p.nombre === body.nombre && p.id_usuario === body.id_usuario
+    );
+
+    if (duplicate) {
+      return res.status(409).send({
+        status: "FAILED",
+        data: { error: "Ya existe una playlist con ese nombre para este usuario" }
+      });
+    }
+
+    // 3. Crear playlist
+    const newPlaylist = {
+      ...body,
+      imagen_portada: body.imagen_portada || DEFAULT_PLAYLIST_IMAGE,
+      canciones_ids: body.canciones_ids || []
+    };
+
     const createdPlaylist = await musicService.createNewPlaylist(newPlaylist);
+
     res.status(201).send({ status: "OK", data: createdPlaylist });
 
   } catch (error) {
@@ -476,6 +591,32 @@ const updateOnePlaylist = async (req, res) => {
   }
 
   try {
+    const playlist = await musicService.getOnePlaylist(playlistsId);
+
+    if (!playlist) {
+      return res.status(404).send({
+        status: "FAILED",
+        data: { error: "La playlist no existe" }
+      });
+    }
+
+    // Validar nombre duplicado
+    if (changes.nombre) {
+      const all = await musicService.getAllPlaylists();
+      const duplicate = all.find(
+        p => p.nombre === changes.nombre &&
+             p.id_usuario === playlist.id_usuario &&
+             p.id_playlist !== playlistsId
+      );
+
+      if (duplicate) {
+        return res.status(409).send({
+          status: "FAILED",
+          data: { error: "Ya existe otra playlist con ese nombre" }
+        });
+      }
+    }
+
     const updatedPlaylist = await musicService.updateOnePlaylist(playlistsId, changes);
     res.send({ status: "OK", data: updatedPlaylist });
 
@@ -486,6 +627,7 @@ const updateOnePlaylist = async (req, res) => {
     });
   }
 };
+
 
 
 /**
@@ -504,7 +646,17 @@ const deleteOnePlaylist = async (req, res) => {
   }
 
   try {
+    const playlist = await musicService.getOnePlaylist(playlistId);
+
+    if (!playlist) {
+      return res.status(404).send({
+        status: "FAILED",
+        data: { error: "La playlist no existe" }
+      });
+    }
+
     await musicService.deleteOnePlaylist(playlistId);
+
     res.send({ status: "OK", msg: "Playlist eliminada correctamente" });
 
   } catch (error) {
@@ -514,6 +666,7 @@ const deleteOnePlaylist = async (req, res) => {
     });
   }
 };
+
 
 
 
@@ -639,22 +792,35 @@ const getOneSong = async (req, res) => {
 const createNewSong = async (req, res) => {
   const { body } = req;
 
-  // Validación mínima
   if (!body.titulo || !body.artista || !body.album || !body.duracion_segundos || !body.genero) {
     return res.status(400).send({
       status: "FAILED",
-      data: { error: "Faltan parámetros obligatorios: titulo, artista, album, duracion_segundos, genero" }
+      data: { error: "Faltan parámetros obligatorios" }
     });
   }
 
-  const newSong = {
-    ...body,
-    imagen_cancion: body.imagen_cancion || DEFAULT_SONG_IMAGE,
-    url_audio: body.url_audio || DEFAULT_SONG_AUDIO
-  };
-
   try {
+    // Validar duplicado
+    const allSongs = await musicService.getAllSongs();
+    const duplicate = allSongs.find(
+      s => s.titulo === body.titulo && s.artista === body.artista
+    );
+
+    if (duplicate) {
+      return res.status(409).send({
+        status: "FAILED",
+        data: { error: "Ya existe una canción con ese título y artista" }
+      });
+    }
+
+    const newSong = {
+      ...body,
+      imagen_cancion: body.imagen_cancion || DEFAULT_SONG_IMAGE,
+      url_audio: body.url_audio || DEFAULT_SONG_AUDIO
+    };
+
     const createdSong = await musicService.createNewSong(newSong);
+
     res.status(201).send({ status: "OK", data: createdSong });
 
   } catch (error) {
@@ -664,6 +830,7 @@ const createNewSong = async (req, res) => {
     });
   }
 };
+
 
 
 
@@ -684,6 +851,33 @@ const updateOneSong = async (req, res) => {
   }
 
   try {
+    const song = await musicService.getOneSong(songId);
+
+    if (!song) {
+      return res.status(404).send({
+        status: "FAILED",
+        data: { error: "La canción no existe" }
+      });
+    }
+
+    // Validar duplicado si cambia título o artista
+    if (changes.titulo || changes.artista) {
+      const all = await musicService.getAllSongs();
+      const duplicate = all.find(
+        s =>
+          s.id_cancion !== songId &&
+          (changes.titulo || song.titulo) === s.titulo &&
+          (changes.artista || song.artista) === s.artista
+      );
+
+      if (duplicate) {
+        return res.status(409).send({
+          status: "FAILED",
+          data: { error: "Ya existe otra canción con ese título y artista" }
+        });
+      }
+    }
+
     const updatedSong = await musicService.updateOneSong(songId, changes);
     res.send({ status: "OK", data: updatedSong });
 
@@ -694,6 +888,7 @@ const updateOneSong = async (req, res) => {
     });
   }
 };
+
 
 
 /**
@@ -712,7 +907,17 @@ const deleteOneSong = async (req, res) => {
   }
 
   try {
+    const song = await musicService.getOneSong(songId);
+
+    if (!song) {
+      return res.status(404).send({
+        status: "FAILED",
+        data: { error: "La canción no existe" }
+      });
+    }
+
     await musicService.deleteOneSong(songId);
+
     res.send({ status: "OK", msg: "Canción eliminada correctamente" });
 
   } catch (error) {
@@ -722,6 +927,7 @@ const deleteOneSong = async (req, res) => {
     });
   }
 };
+
 
 
 // =============================================================
@@ -740,6 +946,7 @@ module.exports = {
 
   // Playlists
   getAllPlaylists,
+  getPlaylistsByUser,
   getOnePlaylist,
   createNewPlaylist,
   updateOnePlaylist,
