@@ -46,46 +46,53 @@ const loginUser = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    // Buscar usuario por email
-    const dbUser = await musicService.getUserByEmail(email);
+    // 1. Buscar usuario por email
+    const user = await musicService.getUserByEmail(email);
 
-    // Si no existe, error
-    if (!dbUser) {
+    if (!user) {
       return res.status(400).json({
-        ok: false,
-        msg: "El correo no existe",
+        status: "FAILED",
+        data: { error: "El email no existe" }
       });
     }
 
-    // Comparar contraseña enviada con la almacenada (encriptada)
-    const validPassword = bcrypt.compareSync(password.toString(), dbUser.password);
+    // 2. Validar contraseña
+    const validPassword = bcrypt.compareSync(password, user.password);
 
     if (!validPassword) {
       return res.status(400).json({
-        ok: false,
-        msg: "El password está mal",
+        status: "FAILED",
+        data: { error: "La contraseña no es correcta" }
       });
     }
 
-    // Generar token JWT
-    const token = await generateJWT(dbUser.id_usuario, dbUser.nombre);
+    // 3. Generar token
+    const token = await generateJWT(user.id_usuario, user.nombre);
 
-    // Respuesta correcta
+    // 4. Respuesta en el formato correcto
     return res.json({
-      ok: true,
-      uid: dbUser.id_usuario,
-      name: dbUser.nombre,
-      token,
+      status: "OK",
+      data: {
+        user: {
+          id_usuario: user.id_usuario,
+          nombre: user.nombre,
+          email: user.email,
+          suscripcion: user.suscripcion,
+          playlists_ids: user.playlists_ids || []
+        },
+        token
+      }
     });
 
   } catch (error) {
-    // Error inesperado
+    console.error("Error en login:", error);
     return res.status(500).json({
-      ok: false,
-      msg: "Error, consulte con el admin",
+      status: "FAILED",
+      data: { error: "Error interno del servidor" }
     });
   }
 };
+
 
 
 
@@ -228,30 +235,30 @@ const getOneUser = async (req, res) => {
 const createNewUser = async (req, res) => {
   const { body } = req;
 
-  // 1. Validación de campos obligatorios
-  if (!body.nombre || !body.email || !body.password || !body.suscripcion) {
-    return res.status(400).send({
+  // 1. Validación de campos obligatorios mínimos
+  if (!body.nombre || !body.email || !body.password) {
+    return res.status(400).json({
       status: "FAILED",
-      data: { error: "Faltan parámetros obligatorios" },
+      data: { error: "Faltan parámetros obligatorios: nombre, email o password" }
     });
   }
 
-  // 2. No permitir que el cliente envíe id_usuario manualmente
+  // 2. No permitir id_usuario manual
   if (body.id_usuario) {
-    return res.status(400).send({
+    return res.status(400).json({
       status: "FAILED",
       data: { error: "No se puede especificar 'id_usuario' manualmente" }
     });
   }
 
   try {
-    // 3. Comprobar si ya existe un usuario con ese email
+    // 3. Comprobar email duplicado
     const existingUser = await musicService.getUserByEmail(body.email);
 
     if (existingUser) {
-      return res.status(409).send({
+      return res.status(409).json({
         status: "FAILED",
-        data: { error: "Ya existe un usuario con ese email" },
+        data: { error: "Ya existe un usuario con ese email" }
       });
     }
 
@@ -259,35 +266,46 @@ const createNewUser = async (req, res) => {
     const salt = bcrypt.genSaltSync();
     const hashedPassword = bcrypt.hashSync(body.password, salt);
 
+    // 5. Construir usuario con valores por defecto
     const newUser = {
-      ...body,
+      nombre: body.nombre,
+      email: body.email,
       password: hashedPassword,
-      playlists_ids: [],
-      isAdmin: false,
+      suscripcion: body.suscripcion || "free",
+      isAdmin: typeof body.isAdmin === "boolean" ? body.isAdmin : false,
+      playlists_ids: Array.isArray(body.playlists_ids) ? body.playlists_ids : []
     };
 
-    // 5. Crear usuario
+    // 6. Crear usuario en DB
     const createdUser = await musicService.createNewUser(newUser);
 
-    // 6. Generar token JWT
+    // 7. Generar token
     const token = await generateJWT(createdUser.id_usuario, createdUser.nombre);
 
-    res.status(201).send({
+    // 8. Respuesta estándar
+    return res.status(201).json({
       status: "OK",
       data: {
-        user: createdUser,
-        token,
-      },
+        user: {
+          id_usuario: createdUser.id_usuario,
+          nombre: createdUser.nombre,
+          email: createdUser.email,
+          suscripcion: createdUser.suscripcion,
+          playlists_ids: createdUser.playlists_ids,
+          isAdmin: createdUser.isAdmin
+        },
+        token
+      }
     });
 
   } catch (error) {
-    res.status(500).send({
+    console.error("Error en createNewUser:", error);
+    return res.status(500).json({
       status: "FAILED",
-      data: { error: error.message },
+      data: { error: "Error interno del servidor" }
     });
   }
 };
-
 
 
 /**
