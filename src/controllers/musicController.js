@@ -7,7 +7,7 @@ const bcrypt = require("bcryptjs");
 // Función para generar tokens JWT
 const { generateJWT } = require("../helpers/jwt");
 
-const { ScanCommand } = require("@aws-sdk/lib-dynamodb"); 
+const { ScanCommand,GetCommand } = require("@aws-sdk/lib-dynamodb"); 
 const ddb = require("../database/dynamoClient");
 
 
@@ -465,28 +465,41 @@ const getPlaylistsByUser = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const params = {
-      TableName: "playlists",
-      FilterExpression: "id_usuario = :id",
-      ExpressionAttributeValues: {
-        ":id": id,
-      },
-    };
+    // 1. Obtener usuario (JSON normal)
+    const userResult = await ddb.send(new GetCommand({
+      TableName: "usuarios",
+      Key: { id_usuario: id }
+    }));
 
-    const command = new ScanCommand(params);
-    const result = await ddb.send(command);
+    const user = userResult.Item;
+
+    if (!user || !user.playlists_ids || user.playlists_ids.length === 0) {
+      return res.json({ status: "OK", total: 0, data: [] });
+    }
+
+    // 2. Obtener playlists del usuario
+    const result = await ddb.send(new ScanCommand({
+      TableName: "playlists",
+      FilterExpression: "contains(:ids, id_playlist)",
+      ExpressionAttributeValues: {
+        ":ids": user.playlists_ids
+      }
+    }));
+
+    // 3. YA VIENE TODO EN JSON, no unmarshall
+    const playlists = result.Items;
 
     return res.json({
       status: "OK",
-      total: result.Items.length,
-      data: result.Items,
+      total: playlists.length,
+      data: playlists
     });
 
   } catch (error) {
     console.error("Error en getPlaylistsByUser:", error);
     return res.status(500).json({
       status: "ERROR",
-      message: "No se pudieron obtener las playlists del usuario",
+      message: "No se pudieron obtener las playlists del usuario"
     });
   }
 };
