@@ -18,13 +18,13 @@ const ddb = require("../database/dynamoClient");
 // al crear una playlist o canción.
 
 const DEFAULT_PLAYLIST_IMAGE =
-  "https://ddqlflrzivqquzazcjhg.supabase.co/storage/v1/object/sign/images/default_playlist_image.png?token=...";
+  "https://ddqlflrzivqquzazcjhg.supabase.co/storage/v1/object/sign/images/default_playlist_image.png?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV81Y2IzY2E2Ni1jMjMzLTQxYTItODEzYS1mZTY0NDQyMzU4ZGQiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJpbWFnZXMvZGVmYXVsdF9wbGF5bGlzdF9pbWFnZS5wbmciLCJpYXQiOjE3NzE2MTg5NTEsImV4cCI6MTgwMzE1NDk1MX0.cTh5U3cOJX8eyL6hGIttGf9ROj2j6-Y9ug3cfSjb-hk";
 
 const DEFAULT_SONG_IMAGE =
-  "https://ddqlflrzivqquzazcjhg.supabase.co/storage/v1/object/sign/images/default_song_image.png?token=...";
+  "https://ddqlflrzivqquzazcjhg.supabase.co/storage/v1/object/sign/images/default_song_image2.png?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV81Y2IzY2E2Ni1jMjMzLTQxYTItODEzYS1mZTY0NDQyMzU4ZGQiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJpbWFnZXMvZGVmYXVsdF9zb25nX2ltYWdlMi5wbmciLCJpYXQiOjE3NzE2MTg5MzgsImV4cCI6MTgwMzE1NDkzOH0.9Y0bYqKTQdnHMt3qGtB1hCfLfWt_vHONxuXzZVupGyw";
 
 const DEFAULT_SONG_AUDIO =
-  "https://ddqlflrzivqquzazcjhg.supabase.co/storage/v1/object/sign/music/Rick%20Astley%20...mp3?token=...";
+  "https://ddqlflrzivqquzazcjhg.supabase.co/storage/v1/object/sign/music/Rick%20Astley%20-%20Never%20Gonna%20Give%20You%20Up%20(Official%20Video)%20(4K%20Remaster).mp3?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV81Y2IzY2E2Ni1jMjMzLTQxYTItODEzYS1mZTY0NDQyMzU4ZGQiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJtdXNpYy9SaWNrIEFzdGxleSAtIE5ldmVyIEdvbm5hIEdpdmUgWW91IFVwIChPZmZpY2lhbCBWaWRlbykgKDRLIFJlbWFzdGVyKS5tcDMiLCJpYXQiOjE3NzE2MTg5NzIsImV4cCI6MTgwMzE1NDk3Mn0.9HIvPR8iaOZpZCzAIBg67EETmFa9Jty7zo9RtA91Jwc";
 
 
 
@@ -551,57 +551,54 @@ const getOnePlaylist = async (req, res) => {
  * - Asigna imagen por defecto si no se envía
  * - Guarda la playlist en DynamoDB
  */
+
 const createNewPlaylist = async (req, res) => {
-  const { body } = req;
-
-  if (!body.nombre || !body.descripcion || !body.id_usuario) {
-    return res.status(400).send({
-      status: "FAILED",
-      data: { error: "Faltan parámetros obligatorios: nombre, descripción e id_usuario" }
-    });
-  }
-
   try {
-    // 1. Validar que el usuario existe
-    const user = await musicService.getOneUser(body.id_usuario);
-    if (!user) {
-      return res.status(404).send({
+    const { nombre, descripcion, canciones_ids, id_usuario } = req.body;
+
+    if (!nombre || !descripcion || !id_usuario) {
+      return res.status(400).send({
         status: "FAILED",
-        data: { error: "El usuario no existe" }
+        data: { error: "Faltan parámetros obligatorios: nombre, descripción e id_usuario" }
       });
     }
 
-    // 2. Validar que no exista playlist con el mismo nombre para ese usuario
-    const allPlaylists = await musicService.getAllPlaylists();
-    const duplicate = allPlaylists.find(
-      p => p.nombre === body.nombre && p.id_usuario === body.id_usuario
-    );
+    const DEFAULT_PLAYLIST_IMAGE =
+      "https://ddqlflrzivqquzazcjhg.supabase.co/storage/v1/object/sign/images/default_playlist_image.png?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV81Y2IzY2E2Ni1jMjMzLTQxYTItODEzYS1mZTY0NDQyMzU4ZGQiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJpbWFnZXMvZGVmYXVsdF9wbGF5bGlzdF9pbWFnZS5wbmciLCJpYXQiOjE3NzA5MDU1MTEsImV4cCI6MTgwMjQ0MTUxMX0.K6BaLGTvm7S-qIhVvunMto8naQopRdU6gqFRJEE5fvI";
 
-    if (duplicate) {
-      return res.status(409).send({
-        status: "FAILED",
-        data: { error: "Ya existe una playlist con ese nombre para este usuario" }
-      });
-    }
-
-    // 3. Crear playlist
+    // 1. Crear playlist
     const newPlaylist = {
-      ...body,
-      imagen_portada: body.imagen_portada || DEFAULT_PLAYLIST_IMAGE,
-      canciones_ids: body.canciones_ids || []
+      nombre,
+      descripcion,
+      canciones_ids: canciones_ids || [],
+      imagen_portada: DEFAULT_PLAYLIST_IMAGE,
+      fecha_creacion: new Date().toISOString().split("T")[0],
+      id_usuario, // ← NECESARIO
     };
 
-    const createdPlaylist = await musicService.createNewPlaylist(newPlaylist);
+    const created = await musicService.createNewPlaylist(newPlaylist);
 
-    res.status(201).send({ status: "OK", data: createdPlaylist });
+    // 2. Añadir playlist al usuario
+    const user = await musicService.getOneUser(id_usuario);
+
+    await musicService.updateOneUser(id_usuario, {
+      playlists_ids: [...(user.playlists_ids || []), created.id_playlist]
+    });
+
+    return res.status(201).send({
+      status: "OK",
+      data: created
+    });
 
   } catch (error) {
-    res.status(500).send({
+    console.error(error);
+    return res.status(500).send({
       status: "FAILED",
       data: { error: error.message }
     });
   }
 };
+
 
 
 
